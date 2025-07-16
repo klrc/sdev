@@ -1,0 +1,12 @@
+LICENSE
+MANIFEST.in
+README.md
+pyproject.toml
+setup.py
+sdev/__init__.py
+sdev/serial_controller.py
+sdev.egg-info/PKG-INFO
+sdev.egg-info/SOURCES.txt
+sdev.egg-info/dependency_links.txt
+sdev.egg-info/requires.txt
+sdev.egg-info/top_level.txt

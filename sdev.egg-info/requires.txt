@@ -1,0 +1,2 @@
+pyserial>=3.5
+loguru>=0.6.0

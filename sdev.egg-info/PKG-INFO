@@ -1,0 +1,78 @@
+Metadata-Version: 2.4
+Name: sdev
+Version: 0.1.0
+Summary: 串口控制器工具包
+Home-page: https://github.com/klrc/sdev
+Author: klrc
+Author-email: klrc <144069824@qq.com>
+License: MIT
+Project-URL: Homepage, https://github.com/klrc/sdev
+Project-URL: Repository, https://github.com/klrc/sdev
+Project-URL: Bug Tracker, https://github.com/klrc/sdev/issues
+Keywords: serial,controller,hardware,embedded
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Topic :: System :: Hardware
+Requires-Python: >=3.7
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: pyserial>=3.5
+Requires-Dist: loguru>=0.6.0
+Dynamic: author
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: requires-python
+
+# SDEV
+
+串口控制器工具包
+
+## 安装
+
+```bash
+pip install sdev
+```
+
+## 使用方法
+
+```python
+from sdev import SerialController
+
+# 创建串口控制器实例
+controller = SerialController(serial_port="/dev/ttyUSB0", baudrate=115200)
+
+# 连接串口
+if controller.connect():
+    print("连接成功")
+    
+    # 执行命令
+    result = controller.execute_command("ls")
+    print(result)
+    
+    # 断开连接
+    controller.disconnect()
+else:
+    print("连接失败")
+```
+
+## 功能特性
+
+- 支持串口通信
+- 命令执行和响应处理
+- 自动ANSI转义码清理
+- 连接状态管理
+
+## 依赖
+
+- Python >= 3.7
+- pyserial >= 3.5
+- loguru >= 0.6.0 
