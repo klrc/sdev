@@ -6,7 +6,7 @@ SDEV - 串口控制器工具包
 
 from .serial_controller import SerialController, Demoboard
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __author__ = "klrc"
 __email__ = "144069824@qq.com"
 

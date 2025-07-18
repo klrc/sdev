@@ -138,8 +138,8 @@ class SerialController:
             logger.error("串口未连接")
             return None
         
-        output_lines = []
         start_time = time.time()
+        is_first_line = True
         
         logger.debug(f"等待pattern: {pattern}, 队列当前大小: {self.get_queue_size()}")
         
@@ -147,11 +147,12 @@ class SerialController:
             try:
                 # 非阻塞获取队列数据
                 line = self.output_queue.get(timeout=0.1)
-                output_lines.append(line)
                 
                 if not self.mcp_mode:  # 仅在非MCP模式下输出到终端
-                    if len(output_lines) == 1 and highlight_cmd: # 粉色高亮 输入命令回显
-                        print(f"\033[95m{output_lines[0]}\033[0m")
+                    if is_first_line:
+                        if highlight_cmd: # 粉色高亮 输入命令回显
+                            print(f"\033[95m{line}\033[0m")
+                        is_first_line = False
                     elif pattern and pattern in line: # 绿色高亮 命令匹配pattern
                         clean_line = self._remove_ansi_codes(line)  
                         highlighted_line = clean_line.replace(pattern, f"\033[32m{pattern}\033[90m")
@@ -161,12 +162,14 @@ class SerialController:
                         clean_line = self._remove_ansi_codes(line)
                         print(f"\033[90m{clean_line}\033[0m")
 
+                yield line  # 允许外部迭代获取数据
+
                 # 检查pattern匹配（无论是否MCP模式都要检查）
                 if pattern and pattern in line:
                     logger.debug(f"找到pattern: {pattern}")
                     if not self.mcp_mode and not pattern.endswith(" #"): # 不常见的pattern匹配符，大概率需要输出换行
                         print()
-                    return output_lines
+                    return
                     
             except queue.Empty:
                 continue
@@ -177,8 +180,19 @@ class SerialController:
         # 超时处理
         if pattern:
             logger.debug(f"等待pattern超时: {pattern}, 最终队列大小: {self.get_queue_size()}")
+            raise TimeoutError(f"等待pattern '{pattern}' 超时")
         
-        return output_lines if output_lines else None
+
+    def wait_for(self, pattern, timeout_seconds=None, highlight_cmd=False):
+        try:
+            result = []
+            for line in self.reap(pattern, timeout_seconds, highlight_cmd):
+                result.append(line)
+        except TimeoutError:
+            logger.error(f"获取命令结果超时")
+            return None                
+        return result
+            
 
     def execute_command(self, command, pattern=" #", timeout=None):
         """
@@ -202,11 +216,7 @@ class SerialController:
             return None
         
         # 等待响应
-        result = self.reap(pattern, timeout, highlight_cmd=True)
-        if not result:
-            logger.error("命令执行失败或超时")
-            return None
-        
+        result = self.wait_for(pattern, timeout, highlight_cmd=True)            
         return result
 
 
@@ -239,11 +249,11 @@ class Demoboard(SerialController):
         # 确保命令行状态
         result = self.execute_command(CTRL_C, self.cli_prompt, 1)
         if result is None:
-            self.reap(self.cli_startup_done_flag)
+            self.wait_for(self.cli_startup_done_flag)
 
         # 校正回显
         print()
-        self.reap(self.cli_prompt)
+        self.wait_for(self.cli_prompt)
     
     def close(self):
         """关闭连接"""
