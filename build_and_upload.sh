@@ -72,6 +72,6 @@ unset TWINE_USERNAME TWINE_PASSWORD TWINE_DISABLE_PROMPT
 
 # 验证
 sleep 5
-pip install --upgrade sdev==$version && success "PyPI 安装验证通过" || warning "PyPI 安装验证失败，可能需要等待同步"
+pip install --upgrade sdev==$version --index-url https://pypi.org/simple && success "PyPI 安装验证通过" || warning "PyPI 安装验证失败，可能需要等待同步"
 
 success "全部流程完成！版本 $version 已发布。"
