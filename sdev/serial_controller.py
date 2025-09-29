@@ -183,18 +183,21 @@ class SerialController:
             raise TimeoutError(f"等待pattern '{pattern}' 超时")
         
 
-    def wait_for(self, pattern, timeout_seconds=None, highlight_cmd=False):
-        try:
-            result = []
-            for line in self.reap(pattern, timeout_seconds, highlight_cmd):
-                result.append(line)
-        except TimeoutError:
-            logger.error(f"获取命令结果超时")
-            return None                
-        return result
+    def wait_for(self, pattern, timeout_seconds=None, highlight_cmd=False, as_generator=False):
+        if as_generator:
+            return self.reap(pattern, timeout_seconds, highlight_cmd)
+        else:
+            try:
+                result = []
+                for line in self.reap(pattern, timeout_seconds, highlight_cmd):
+                    result.append(line)
+            except TimeoutError:
+                logger.error(f"获取命令结果超时")
+                return None                
+            return result
             
 
-    def execute_command(self, command, pattern=" #", timeout=None):
+    def execute_command(self, command, pattern=" #", timeout=None, as_generator=False):
         """
         执行命令 - 统一的命令执行接口
         
@@ -216,7 +219,7 @@ class SerialController:
             return None
         
         # 等待响应
-        result = self.wait_for(pattern, timeout, highlight_cmd=True)            
+        result = self.wait_for(pattern, timeout, highlight_cmd=True, as_generator=as_generator)            
         return result
 
 
@@ -247,7 +250,7 @@ class Demoboard(SerialController):
         self.connect()
 
         # 确保命令行状态
-        result = self.execute_command(CTRL_C, self.cli_prompt, 1)
+        result = self.execute_command(CTRL_C, self.cli_prompt, 1, as_generator=False)
         if result is None:
             self.wait_for(self.cli_startup_done_flag)
 

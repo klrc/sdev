@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="sdev",
-    version="0.1.2",
+    version="0.1.3",
     author="klrc",
     author_email="144069824@qq.com",
     description="串口控制器工具包",
