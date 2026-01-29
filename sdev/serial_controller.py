@@ -17,6 +17,7 @@ class SerialController:
         self.serial_conn = None
         self.is_connected = False
         self.mcp_mode = mcp_mode  # MCP模式下禁用终端输出
+        self.strip_outputs = True
         
         # 异步处理相关
         self.read_thread = None
@@ -41,7 +42,9 @@ class SerialController:
                 line = self.serial_conn.readline()
                 if line:
                     try:
-                        decoded_line = line.decode('utf-8').strip()
+                        decoded_line = line.decode('utf-8')
+                        if self.strip_outputs:
+                            decoded_line = decoded_line.strip()
                         if decoded_line:
                             self.output_queue.put(decoded_line)
                             self.last_message = decoded_line
