@@ -324,7 +324,7 @@ class TestModuleLevelAPI(unittest.TestCase):
         with patch.object(sdev, "_default_session", mock_sess):
             result = sdev.cli("echo x", timeout=5)
 
-        mock_sess.cli.assert_called_once_with("echo x", 5, None)
+        mock_sess.cli.assert_called_once_with("echo x", 5, None, network_guard=None)
         self.assertEqual(result.output, "x\n")
 
     def test_module_cli_passes_end_flag(self):
@@ -336,7 +336,7 @@ class TestModuleLevelAPI(unittest.TestCase):
         with patch.object(sdev, "_default_session", mock_sess):
             sdev.cli("bench", end_flag="Frame rate:")
 
-        mock_sess.cli.assert_called_once_with("bench", None, "Frame rate:")
+        mock_sess.cli.assert_called_once_with("bench", None, "Frame rate:", network_guard=None)
 
     def test_module_connect_delegates(self):
         """sdev.connect() should call default session's connect()."""

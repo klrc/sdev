@@ -55,7 +55,7 @@ class TestModuleLevelAPIDelegation(unittest.TestCase):
         with patch.object(sdev, "_default_session") as mock_sess:
             mock_sess.cli.return_value = mock_result
             result = sdev.cli("echo hi")
-            mock_sess.cli.assert_called_once_with("echo hi", None, None)
+            mock_sess.cli.assert_called_once_with("echo hi", None, None, network_guard=None)
             self.assertEqual(result.output, "hi\n")
 
     def test_module_stream_delegates(self):

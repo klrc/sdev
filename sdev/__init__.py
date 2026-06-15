@@ -21,13 +21,14 @@ CLI::
 
 from __future__ import annotations
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 import time
 import re
 import os
 import sys
 import glob
+import shlex
 import serial
 import threading
 from pathlib import Path
@@ -82,6 +83,9 @@ CONFIG_FILE = CONFIG_DIR / "defaults.json"
 # Buffer size limits to prevent unbounded memory growth
 MAX_BUFFER_SIZE = 65536  # 64KB
 TRIM_BUFFER_SIZE = 32768  # Keep last 32KB after trim
+
+NETWORK_GUARD_MARKER = "[sdev network guard]"
+_NETWORK_GUARD_DISABLE_VALUES = {"0", "false", "False", "no", "NO", "off", "OFF"}
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +156,113 @@ def _prompt_detected(buf: bytes) -> bool:
         if stripped.endswith(p):
             return True
     return False
+
+
+_RISKY_NETWORK_RE = re.compile(
+    r"""
+    (?:
+        ifconfig\s+\S+\s+(?:down|up|hw\s+ether|(?:\d{1,3}\.){3}\d{1,3}|netmask)
+      | ip\s+(?:addr|address|link|route)\b[^\n;&|]*\b(?:add|del|delete|flush|set|replace|change|down|up)\b
+      | route\s+(?:add|del|delete)\b
+      | udhcpc\b
+      | dhclient\b
+      | nmcli\b
+      | netplan\s+apply\b
+      | /etc/init\.d/network(?:ing)?\b
+      | service\s+network(?:ing)?\b
+      | systemctl\s+(?:restart|reload|stop|start)\s+network(?:ing)?\b
+    )
+    """,
+    re.VERBOSE,
+)
+
+_GLOBAL_NETWORK_RE = re.compile(
+    r"""
+    \b(
+        ip\s+route\s+(?:flush|replace|change|del|delete)\b
+      | route\s+(?:add|del|delete)\b
+      | udhcpc\b
+      | dhclient\b
+      | nmcli\b
+      | netplan\s+apply\b
+      | /etc/init\.d/network(?:ing)?\b
+      | service\s+network(?:ing)?\b
+      | systemctl\s+(?:restart|reload|stop|start)\s+network(?:ing)?\b
+    )
+    """,
+    re.VERBOSE,
+)
+
+
+def _extract_network_ifaces(command: str) -> set[str]:
+    """Best-effort extraction of interfaces modified by a shell command."""
+    ifaces: set[str] = set()
+    iface = r"([A-Za-z0-9_.:-]+)"
+    patterns = [
+        rf"\bifconfig\s+{iface}\s+(?:down|up|hw\s+ether|(?:\d{{1,3}}\.){{3}}\d{{1,3}}|netmask)",
+        rf"\bip\s+link\s+set\s+(?:dev\s+)?{iface}\b",
+        rf"\bip\s+(?:addr|address)\b[^\n;&|]*\bdev\s+{iface}\b",
+        rf"\bip\s+route\b[^\n;&|]*\bdev\s+{iface}\b",
+        rf"\budhcpc\b[^\n;&|]*\s-i\s*{iface}\b",
+        rf"\bdhclient\b[^\n;&|]*\s{iface}\b",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, command):
+            value = match.group(1)
+            if value and not value.startswith("$"):
+                ifaces.add(value)
+    return ifaces
+
+
+def _network_guard_enabled(network_guard: Optional[bool]) -> bool:
+    if network_guard is not None:
+        return network_guard
+    return os.environ.get("SDEV_NETWORK_GUARD", "1") not in _NETWORK_GUARD_DISABLE_VALUES
+
+
+def _guard_network_command(command: str, network_guard: Optional[bool]) -> str:
+    """Wrap risky network mutations with an NFS-route preflight."""
+    if not _network_guard_enabled(network_guard):
+        return command
+    if not _RISKY_NETWORK_RE.search(command):
+        return command
+
+    ifaces = sorted(_extract_network_ifaces(command))
+    global_risk = _GLOBAL_NETWORK_RE.search(command) is not None or not ifaces
+    iface_words = " ".join(ifaces)
+
+    return f"""__sdev_cmd={shlex.quote(command)}
+__sdev_ifaces={shlex.quote(iface_words)}
+__sdev_global={1 if global_risk else 0}
+cd / || exit 125
+__sdev_block=
+__sdev_details=
+while read -r __sdev_spec __sdev_mp __sdev_fstype __sdev_rest; do
+    case "$__sdev_fstype" in
+        nfs|nfs4)
+            __sdev_server="${{__sdev_spec%%:*}}"
+            __sdev_route="$(ip route get "$__sdev_server" 2>/dev/null || true)"
+            __sdev_dev="$(printf '%s\\n' "$__sdev_route" | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p' | head -n 1)"
+            [ -n "$__sdev_dev" ] || continue
+            __sdev_details="$__sdev_details ${{__sdev_spec}} via ${{__sdev_dev}};"
+            if [ "$__sdev_global" = 1 ]; then
+                __sdev_block="network command may disrupt NFS mount(s)"
+            else
+                case " $__sdev_ifaces " in
+                    *" $__sdev_dev "*) __sdev_block="target interface $__sdev_dev carries NFS" ;;
+                esac
+            fi
+            ;;
+    esac
+done < /proc/mounts
+if [ -n "$__sdev_block" ]; then
+    printf '%s refusing to run: %s. NFS route(s):%s Command: %s\\n' \\
+        {shlex.quote(NETWORK_GUARD_MARKER)} "$__sdev_block" "$__sdev_details" "$__sdev_cmd"
+    printf '%s\\n' 'Use network_guard=False or SDEV_NETWORK_GUARD=0 only if this network change is intentional.'
+    exit 125
+fi
+eval "$__sdev_cmd"
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +570,8 @@ class SerialSession:
         command: str,
         timeout: Optional[float] = None,
         end_flag: Optional[str] = None,
+        *,
+        network_guard: Optional[bool] = None,
     ) -> SerialResult:
         """Send *command* over serial and return its output.
 
@@ -468,13 +581,22 @@ class SerialSession:
         *end_flag*: a specific string to wait for instead of (or before) a
         shell prompt.  Useful for commands that keep running after producing
         their result (e.g. benchmarks that print "Frame rate: ...").
+
+        *network_guard*: when enabled (default), risky network mutations are
+        refused if they could disconnect a currently mounted NFS filesystem.
         """
         if not self._lock.acquire(timeout=10):
             raise RuntimeError(
                 "Serial port is busy — another command is in progress on this session."
             )
         try:
-            return self._cli_impl(command, timeout, end_flag)
+            guarded_command = _guard_network_command(command, network_guard)
+            return self._cli_impl(
+                guarded_command,
+                timeout,
+                end_flag,
+                display_command=command,
+            )
         finally:
             self._lock.release()
 
@@ -483,6 +605,7 @@ class SerialSession:
         command: str,
         timeout: Optional[float],
         end_flag: Optional[str],
+        display_command: Optional[str] = None,
     ) -> SerialResult:
         ser = self._ensure_open()
         deadline = timeout or DEFAULT_TIMEOUT
@@ -507,7 +630,7 @@ class SerialSession:
                 chunk = ser.read(4096)
             except serial.SerialException as exc:
                 return SerialResult(
-                    command=command,
+                    command=display_command or command,
                     output=f"[sdev] serial error: {exc}",
                     timed_out=True,
                     elapsed=round(time.monotonic() - start, 2),
@@ -532,7 +655,7 @@ class SerialSession:
         clean = _strip_echo(clean, command)
         clean = _strip_prompt_instance(clean, self._prompts)
         return SerialResult(
-            command=command,
+            command=display_command or command,
             output=clean.decode(errors="replace"),
             timed_out=timed_out,
             elapsed=round(elapsed, 2),
@@ -753,9 +876,11 @@ def cli(
     command: str,
     timeout: Optional[float] = None,
     end_flag: Optional[str] = None,
+    *,
+    network_guard: Optional[bool] = None,
 ) -> SerialResult:
     """Send *command* over the default connection and return output."""
-    return _default_session.cli(command, timeout, end_flag)
+    return _default_session.cli(command, timeout, end_flag, network_guard=network_guard)
 
 
 def run(

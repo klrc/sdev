@@ -119,6 +119,62 @@ class TestSerialSession(unittest.TestCase):
         self.assertTrue(result.timed_out)
         self.assertGreater(result.elapsed, 0.15)
 
+    def test_cli_leaves_non_network_command_unwrapped(self):
+        mock_ser = MagicMock()
+        mock_ser.is_open = True
+        mock_ser.read.side_effect = [b"hello\n# ", b""]
+
+        sess = sdev.SerialSession()
+        sess._connection = mock_ser
+
+        result = sess.cli("echo hello")
+        self.assertEqual(result.command, "echo hello")
+        mock_ser.write.assert_called_once_with(b"echo hello\n")
+
+    def test_cli_wraps_risky_network_command(self):
+        mock_ser = MagicMock()
+        mock_ser.is_open = True
+        mock_ser.read.side_effect = [
+            (
+                b"[sdev network guard] refusing to run: target interface eth0 "
+                b"carries NFS. NFS route(s): 192.168.1.11:/nfs via eth0; "
+                b"Command: ifconfig eth0 down\n"
+                b"Use network_guard=False or SDEV_NETWORK_GUARD=0 only if this "
+                b"network change is intentional.\n# "
+            ),
+            b"",
+        ]
+
+        sess = sdev.SerialSession()
+        sess._connection = mock_ser
+
+        result = sess.cli("ifconfig eth0 down")
+        sent = mock_ser.write.call_args.args[0].decode()
+        self.assertEqual(result.command, "ifconfig eth0 down")
+        self.assertIn("cd / || exit 125", sent)
+        self.assertIn("/proc/mounts", sent)
+        self.assertIn("ip route get", sent)
+        self.assertIn("ifconfig eth0 down", sent)
+        self.assertIn("[sdev network guard] refusing to run", result.output)
+        self.assertIn("target interface eth0 carries NFS", result.output)
+
+    def test_cli_network_guard_can_be_disabled_per_call(self):
+        mock_ser = MagicMock()
+        mock_ser.is_open = True
+        mock_ser.read.side_effect = [b"ok\n# ", b""]
+
+        sess = sdev.SerialSession()
+        sess._connection = mock_ser
+
+        sess.cli("ifconfig eth0 down", network_guard=False)
+        mock_ser.write.assert_called_once_with(b"ifconfig eth0 down\n")
+
+    def test_variable_iface_network_command_is_guarded_globally(self):
+        command = 'for iface in eth0 eth1; do ifconfig $iface down; done'
+        wrapped = sdev._guard_network_command(command, network_guard=True)
+        self.assertIn("__sdev_global=1", wrapped)
+        self.assertIn("network command may disrupt NFS mount(s)", wrapped)
+
     def test_stream_yields_chunks(self):
         mock_ser = MagicMock()
         mock_ser.is_open = True
